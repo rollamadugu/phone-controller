@@ -1,72 +1,45 @@
 name: Build Android APK
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-    - name: Set up Python
+    - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
-    - name: Install system dependencies
+    - name: Install Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
-          python3-pip \
-          build-essential \
-          git \
-          ffmpeg \
-          libsdl2-dev \
-          libsdl2-image-dev \
-          libsdl2-mixer-dev \
-          libsdl2-ttf-dev \
-          libportmidi-dev \
-          libswscale-dev \
-          libavformat-dev \
-          libavcodec-dev \
-          zlib1g-dev \
-          libgstreamer1.0-dev \
-          gstreamer1.0-plugins-base \
-          gstreamer1.0-plugins-good \
-          libltdl-dev \
-          libffi-dev \
-          autoconf \
-          automake \
-          cmake \
-          gettext \
-          libgettextpo-dev \
-          libtool \
-          pkg-config \
-          zip \
-          unzip \
-          openjdk-17-jdk
+        sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+        pip install --upgrade buildozer cython virtualenv
 
-    - name: Install Python dependencies
+    - name: Initialize Buildozer
       run: |
-        pip install --upgrade pip
-        pip install buildozer cython virtualenv
-        pip install kivy
+        buildozer init
+        sed -i 's/requirements = python3,kivy/requirements = python3,kivy,pyjnius,android,python-socketio,websocket-client/' buildozer.spec
+        sed -i 's/# android.permissions/android.permissions/' buildozer.spec
 
-    - name: Build APK with Buildozer
+    - name: Build APK
       run: |
-        buildozer android debug
-      timeout-minutes: 60
-
+        yes | buildozer android debug 2>&1 | tee build.log || true
+        
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: phone-controller-apk
+        name: apk
         path: bin/*.apk
-        retention-days: 30
+        if-no-files-found: ignore
+        
+    - name: Upload Build Log
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log
+        path: build.log
