@@ -10,9 +10,10 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
-    
-    - name: Create Main App
+
+    - name: Create App Files
       run: |
+        # Create main.py
         cat > main.py << 'ENDOFPYTHON'
         from kivy.app import App
         from kivy.uix.boxlayout import BoxLayout
@@ -26,7 +27,6 @@ jobs:
         import socket
         import datetime
 
-        # Android imports
         if platform == 'android':
             from jnius import autoclass
             from android.permissions import request_permissions, Permission
@@ -35,7 +35,6 @@ jobs:
             PythonActivity = autoclass('org.kivy.android.PythonActivity')
             Context = autoclass('android.content.Context')
 
-        # Socket.IO import
         try:
             import socketio
             SIO_AVAILABLE = True
@@ -43,15 +42,12 @@ jobs:
             SIO_AVAILABLE = False
 
         class PhoneControllerApp(App):
-            
             def __init__(self, **kwargs):
                 super().__init__(**kwargs)
                 self.sio = None
                 self.connected = False
-                self.server_url = ""
-            
+
             def build(self):
-                # Request permissions on Android
                 if platform == 'android':
                     request_permissions([
                         Permission.INTERNET,
@@ -59,123 +55,84 @@ jobs:
                         Permission.WRITE_EXTERNAL_STORAGE,
                         Permission.READ_EXTERNAL_STORAGE,
                     ])
-                
-                # Main layout
+
                 main = BoxLayout(orientation='vertical', padding=15, spacing=8)
-                
-                # Title
+
                 main.add_widget(Label(
                     text='[b]Phone Controller[/b]',
                     markup=True,
                     font_size='26sp',
                     size_hint_y=0.1
                 ))
-                
-                # Status
+
                 self.status_label = Label(
-                    text='[color=ff0000]● Disconnected[/color]',
+                    text='[color=ff0000]Disconnected[/color]',
                     markup=True,
                     font_size='16sp',
                     size_hint_y=0.06
                 )
                 main.add_widget(self.status_label)
-                
-                # URL Input
+
                 main.add_widget(Label(text='Server URL:', font_size='14sp', size_hint_y=0.05))
                 self.url_input = TextInput(
                     text='http://192.168.1.100:5000',
                     multiline=False,
-                    size_hint_y=0.08,
-                    font_size='15sp'
+                    size_hint_y=0.08
                 )
                 main.add_widget(self.url_input)
-                
-                # Connect Button
-                self.connect_btn = Button(
-                    text='Connect',
-                    size_hint_y=0.08,
-                    background_color=(0.2, 0.7, 0.2, 1),
-                    font_size='16sp'
-                )
+
+                self.connect_btn = Button(text='Connect', size_hint_y=0.08)
                 self.connect_btn.bind(on_press=self.toggle_connection)
                 main.add_widget(self.connect_btn)
-                
-                # Separator
-                main.add_widget(Label(text='─' * 40, size_hint_y=0.03, font_size='10sp'))
-                
-                # Log Label
-                main.add_widget(Label(text='Activity Log:', font_size='14sp', size_hint_y=0.05))
-                
-                # Log Area
-                scroll = ScrollView(size_hint_y=0.55)
+
+                main.add_widget(Label(text='Log:', font_size='14sp', size_hint_y=0.05))
+
                 self.log_text = TextInput(
-                    text='App started. Enter server URL and tap Connect.\n',
+                    text='Ready...\n',
                     multiline=True,
                     readonly=True,
-                    font_size='13sp',
-                    background_color=(0.1, 0.1, 0.12, 1),
-                    foreground_color=(0.9, 0.9, 0.9, 1)
+                    size_hint_y=0.58
                 )
-                scroll.add_widget(self.log_text)
-                main.add_widget(scroll)
-                
+                main.add_widget(self.log_text)
+
                 return main
-            
+
             def toggle_connection(self, instance):
                 if self.connected:
                     self.disconnect_server()
                 else:
                     self.connect_server()
-            
+
             def connect_server(self):
-                self.server_url = self.url_input.text.strip()
-                self.add_log(f'Connecting to {self.server_url}...')
-                
-                if not SIO_AVAILABLE:
-                    self.add_log('Socket.IO not available, using basic mode')
-                    threading.Thread(target=self.basic_connect, daemon=True).start()
-                    return
-                
-                # Create Socket.IO client
-                self.sio = socketio.Client(reconnection=True, reconnection_attempts=3)
-                
-                @self.sio.on('connect')
-                def on_connect():
-                    Clock.schedule_once(lambda dt: self.on_connected())
-                
-                @self.sio.on('disconnect')
-                def on_disconnect():
-                    Clock.schedule_once(lambda dt: self.on_disconnected())
-                
-                @self.sio.on('execute_command')
-                def on_command(data):
-                    Clock.schedule_once(lambda dt: self.execute_command(data))
-                
-                # Connect in background
-                threading.Thread(target=self._do_connect, daemon=True).start()
-            
-            def _do_connect(self):
+                url = self.url_input.text.strip()
+                self.add_log(f'Connecting to {url}...')
+                threading.Thread(target=lambda: self._connect(url), daemon=True).start()
+
+            def _connect(self, url):
                 try:
-                    self.sio.connect(self.server_url)
+                    if SIO_AVAILABLE:
+                        self.sio = socketio.Client()
+                        
+                        @self.sio.on('connect')
+                        def on_connect():
+                            Clock.schedule_once(lambda dt: self.on_connected())
+                        
+                        @self.sio.on('execute_command')
+                        def on_cmd(data):
+                            Clock.schedule_once(lambda dt: self.execute_command(data))
+                        
+                        self.sio.connect(url)
+                    else:
+                        host = url.replace('http://','').replace('https://','').split(':')[0]
+                        port = int(url.split(':')[-1].split('/')[0]) if ':' in url else 80
+                        s = socket.socket()
+                        s.settimeout(5)
+                        s.connect((host, port))
+                        s.close()
+                        Clock.schedule_once(lambda dt: self.on_connected())
                 except Exception as e:
-                    Clock.schedule_once(lambda dt: self.add_log(f'Connection error: {e}'))
-            
-            def basic_connect(self):
-                """Basic connectivity test without Socket.IO"""
-                try:
-                    url = self.server_url.replace('http://', '').replace('https://', '')
-                    host = url.split(':')[0] if ':' in url else url.split('/')[0]
-                    port = int(url.split(':')[1].split('/')[0]) if ':' in url else 80
-                    
-                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s.settimeout(5)
-                    s.connect((host, port))
-                    s.close()
-                    
-                    Clock.schedule_once(lambda dt: self.on_connected())
-                except Exception as e:
-                    Clock.schedule_once(lambda dt: self.add_log(f'Connection failed: {e}'))
-            
+                    Clock.schedule_once(lambda dt: self.add_log(f'Error: {e}'))
+
             def disconnect_server(self):
                 if self.sio:
                     try:
@@ -183,113 +140,84 @@ jobs:
                     except:
                         pass
                 self.on_disconnected()
-            
+
             def on_connected(self):
                 self.connected = True
-                self.status_label.text = '[color=00ff00]● Connected[/color]'
+                self.status_label.text = '[color=00ff00]Connected[/color]'
                 self.connect_btn.text = 'Disconnect'
-                self.connect_btn.background_color = (0.8, 0.2, 0.2, 1)
-                self.add_log('Connected to server!')
-                
-                # Register phone
-                if self.sio and SIO_AVAILABLE:
-                    try:
-                        phone_id = socket.gethostname()
-                        self.sio.emit('phone_register', {'phone_id': phone_id})
-                    except:
-                        pass
-            
+                self.add_log('Connected!')
+                if self.sio:
+                    self.sio.emit('phone_register', {'phone_id': socket.gethostname()})
+
             def on_disconnected(self):
                 self.connected = False
-                self.status_label.text = '[color=ff0000]● Disconnected[/color]'
+                self.status_label.text = '[color=ff0000]Disconnected[/color]'
                 self.connect_btn.text = 'Connect'
-                self.connect_btn.background_color = (0.2, 0.7, 0.2, 1)
-                self.add_log('Disconnected from server')
-            
+                self.add_log('Disconnected')
+
             def execute_command(self, data):
                 cmd = data.get('cmd', '')
-                self.add_log(f'Received: {cmd}')
-                
+                self.add_log(f'Command: {cmd}')
+
                 if platform != 'android':
-                    self.add_log(f'(Desktop mode - command simulated)')
                     return
-                
+
                 try:
                     activity = PythonActivity.mActivity
-                    
+
                     if cmd == 'camera':
                         intent = Intent('android.media.action.STILL_IMAGE_CAMERA')
                         activity.startActivity(intent)
-                        
                     elif cmd == 'whatsapp':
                         intent = activity.getPackageManager().getLaunchIntentForPackage('com.whatsapp')
                         if intent:
                             activity.startActivity(intent)
-                            
                     elif cmd == 'chrome':
-                        intent = Intent(Intent.ACTION_VIEW, Uri.parse('https://www.google.com'))
+                        intent = Intent(Intent.ACTION_VIEW, Uri.parse('https://google.com'))
                         activity.startActivity(intent)
-                        
                     elif cmd == 'youtube':
-                        intent = Intent(Intent.ACTION_VIEW, Uri.parse('https://www.youtube.com'))
+                        intent = Intent(Intent.ACTION_VIEW, Uri.parse('https://youtube.com'))
                         activity.startActivity(intent)
-                        
-                    elif cmd == 'instagram':
-                        intent = activity.getPackageManager().getLaunchIntentForPackage('com.instagram.android')
-                        if intent:
-                            activity.startActivity(intent)
-                            
                     elif cmd == 'settings':
                         intent = Intent('android.settings.SETTINGS')
                         activity.startActivity(intent)
-                        
                     elif cmd == 'home':
                         intent = Intent(Intent.ACTION_MAIN)
                         intent.addCategory(Intent.CATEGORY_HOME)
-                        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         activity.startActivity(intent)
-                        
                     elif cmd == 'open_url':
                         url = data.get('url', 'https://google.com')
                         intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
                         activity.startActivity(intent)
-                        
                     elif cmd == 'volume_up':
                         AudioManager = autoclass('android.media.AudioManager')
                         audio = activity.getSystemService(Context.AUDIO_SERVICE)
                         audio.adjustVolume(AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
-                        
                     elif cmd == 'volume_down':
                         AudioManager = autoclass('android.media.AudioManager')
                         audio = activity.getSystemService(Context.AUDIO_SERVICE)
                         audio.adjustVolume(AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
-                    
-                    self.add_log(f'Executed: {cmd}')
-                    
-                    # Send result back
-                    if self.sio:
-                        self.sio.emit('command_result', {'result': f'OK: {cmd}'})
-                        
+
+                    self.add_log(f'Done: {cmd}')
                 except Exception as e:
                     self.add_log(f'Error: {e}')
-            
-            def add_log(self, message):
-                time_str = datetime.datetime.now().strftime('%H:%M:%S')
-                self.log_text.text = f'[{time_str}] {message}\n' + self.log_text.text
+
+            def add_log(self, msg):
+                t = datetime.datetime.now().strftime('%H:%M:%S')
+                self.log_text.text = f'[{t}] {msg}\n' + self.log_text.text
 
         if __name__ == '__main__':
             PhoneControllerApp().run()
         ENDOFPYTHON
 
-    - name: Create Buildozer Spec
-      run: |
+        # Create buildozer.spec
         cat > buildozer.spec << 'ENDOFSPEC'
         [app]
         title = Phone Controller
         package.name = phonecontroller
         package.domain = org.phonecontroller
         source.dir = .
-        source.include_exts = py,png,jpg,kv,atlas
+        source.include_exts = py
         version = 1.0
         requirements = python3,kivy,pyjnius,android,python-socketio,websocket-client
         android.permissions = INTERNET,ACCESS_NETWORK_STATE,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
@@ -298,20 +226,35 @@ jobs:
         android.archs = arm64-v8a
         orientation = portrait
         fullscreen = 0
-        android.allow_backup = True
-        
+
         [buildozer]
         log_level = 2
         warn_on_root = 1
         ENDOFSPEC
 
-    - name: Build APK with Buildozer
-      uses: ArtemSBulgakov/buildozer-action@v1
-      with:
-        command: buildozer android debug
-        
+    - name: Build APK
+      run: |
+        docker run --rm \
+          -v "${{ github.workspace }}:/home/user/hostcwd" \
+          kivy/buildozer:latest \
+          bash -c "cd /home/user/hostcwd && buildozer android debug"
+
+    - name: List APK Files
+      run: |
+        echo "=== Checking for APK ==="
+        find . -name "*.apk" -type f
+        ls -la bin/ || echo "No bin folder"
+
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: phone-controller-apk
         path: bin/*.apk
+        if-no-files-found: warn
+
+    - name: Upload Log on Failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: buildozer-log
+        path: .buildozer/logs/
